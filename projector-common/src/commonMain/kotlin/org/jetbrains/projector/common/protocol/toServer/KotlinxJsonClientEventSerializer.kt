@@ -34,4 +34,6 @@ object KotlinxJsonClientEventSerializer {
 
   fun serializeList(msg: List<ClientEvent>): String = json.encodeToString(serializer, msg)
   fun deserializeList(data: String): List<ClientEvent> = json.decodeFromString(serializer, data)
+
+  fun deserializeFromRelay(data: String): RelayControlEvent = json.decodeFromString(RelayControlEvent.serializer(), data)
 }

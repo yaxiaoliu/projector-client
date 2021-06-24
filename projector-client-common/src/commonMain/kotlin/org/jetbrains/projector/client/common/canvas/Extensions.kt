@@ -39,7 +39,7 @@ object Extensions {
       return  // prevents clearing canvas
     }
 
-    if (this.width == 0 || this.width == 0) {
+    if (this.width == 0 || this.height == 0) {
       this.width = width
       this.height = height
 
@@ -121,8 +121,8 @@ object Extensions {
   fun Short.toFontFaceName(): String = "serverFont$this"
 
   /* Creates an rgba(...) string (JS-like) by an ARGB number (Java-like). */
-  fun Number.argbIntToRgbaString(): String {
-    val colorValue = this.toLong()
+  fun Int.argbIntToRgbaString(): String {
+    val colorValue = this
 
     val b = colorValue and 0xFF
     val g = (colorValue ushr 8) and 0xFF

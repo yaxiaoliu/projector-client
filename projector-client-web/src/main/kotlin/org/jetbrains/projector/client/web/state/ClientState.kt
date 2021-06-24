@@ -26,6 +26,9 @@ package org.jetbrains.projector.client.web.state
 import kotlinext.js.jsObject
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.jetbrains.projector.client.common.misc.ImageCacher
 import org.jetbrains.projector.client.common.misc.ParamsProvider
 import org.jetbrains.projector.client.common.misc.TimeStamp
@@ -38,8 +41,6 @@ import org.jetbrains.projector.client.web.debug.DivSentReceivedBadgeShower
 import org.jetbrains.projector.client.web.debug.NoSentReceivedBadgeShower
 import org.jetbrains.projector.client.web.debug.SentReceivedBadgeShower
 import org.jetbrains.projector.client.web.input.InputController
-import org.jetbrains.projector.client.web.input.MobileKeyboardHelperImpl
-import org.jetbrains.projector.client.web.input.NopMobileKeyboardHelper
 import org.jetbrains.projector.client.web.misc.*
 import org.jetbrains.projector.client.web.protocol.SupportedTypesProvider
 import org.jetbrains.projector.client.web.speculative.Typing
@@ -82,6 +83,7 @@ sealed class ClientState {
       document.body!!.apply {
         style.apply {
           backgroundColor = ParamsProvider.BACKGROUND_COLOR
+          asDynamic().overscrollBehaviorX = "none"
           asDynamic().overscrollBehaviorY = "none"
           asDynamic().touchAction = "none"
         }
@@ -169,7 +171,8 @@ sealed class ClientState {
             commonVersion = COMMON_VERSION,
             commonVersionId = commonVersionList.indexOf(COMMON_VERSION),
             token = ParamsProvider.HANDSHAKE_TOKEN,
-            initialSize = windowSizeController.currentSize,
+            displays = listOf(DisplayDescription(0, 0, windowSizeController.currentSize.width, windowSizeController.currentSize.height, 1.0)),
+            clientDoesWindowManagement = false,
             supportedToClientCompressions = supportedToClientDecompressors.map(MessageDecompressor<*>::compressionType),
             supportedToClientProtocols = supportedToClientDecoders.map(MessageDecoder<*, *>::protocolType),
             supportedToServerCompressions = supportedToServerCompressors.map(MessageCompressor<*>::compressionType),
@@ -328,10 +331,13 @@ sealed class ClientState {
 
     private val windowDataEventsProcessor = WindowDataEventsProcessor(windowManager)
 
-    private val repainter = window.setInterval(
-      handler = { windowDataEventsProcessor.redrawWindows() },
-      timeout = ParamsProvider.REPAINT_INTERVAL_MS,
-    )
+    private var drawPendingEvents = GlobalScope.launch {
+      // redraw windows in case any missing images are loaded now
+      while (true) {
+        windowDataEventsProcessor.drawPendingEvents()
+        delay(ParamsProvider.REPAINT_INTERVAL_MS.toLong())
+      }
+    }
 
     private val serverEventsProcessor = ServerEventsProcessor(windowDataEventsProcessor)
 
@@ -385,11 +391,6 @@ sealed class ClientState {
 
     private val markdownPanelManager = MarkdownPanelManager(windowManager::getWindowZIndex) { link ->
       stateMachine.fire(ClientAction.AddEvent(ClientOpenLinkEvent(link)))
-    }
-
-    private val mobileKeyboardHelper = when (ParamsProvider.MOBILE_SETTING) {
-      ParamsProvider.MobileSetting.DISABLED -> NopMobileKeyboardHelper
-      else -> MobileKeyboardHelperImpl(openingTimeStamp, inputController.specialKeysState) { stateMachine.fire(ClientAction.AddEvent(it)) }
     }
 
     private val closeBlocker = when (ParamsProvider.BLOCK_CLOSING) {
@@ -520,14 +521,13 @@ sealed class ClientState {
           is ClientAction.WebSocket.Close.FinishNormal -> {
             logger.info { "Connection is closed..." }
 
-            window.clearInterval(repainter)
+            drawPendingEvents.cancel()
             pingStatistics.onClose()
             windowDataEventsProcessor.onClose()
             inputController.removeListeners()
             windowSizeController.removeListener()
             typing.dispose()
             markdownPanelManager.disposeAll()
-            mobileKeyboardHelper.dispose()
             closeBlocker.removeListener()
             selectionBlocker.unblockSelection()
             connectionWatcher.removeWatcher()
@@ -550,12 +550,11 @@ sealed class ClientState {
     private fun reloadConnection(messageText: String): ClientState {
       logger.info { messageText }
 
-      window.clearInterval(repainter)
+      drawPendingEvents.cancel()
       pingStatistics.onClose()
       inputController.removeListeners()
       windowSizeController.removeListener()
       typing.dispose()
-      mobileKeyboardHelper.dispose()
       connectionWatcher.removeWatcher()
 
       layers.reconnectionMessageUpdater(messageText)

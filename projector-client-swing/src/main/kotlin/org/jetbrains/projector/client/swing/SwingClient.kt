@@ -34,14 +34,13 @@ import org.jetbrains.projector.client.common.protocol.KotlinxJsonToServerHandsha
 import org.jetbrains.projector.client.common.protocol.KotlinxProtoBufToClientMessageDecoder
 import org.jetbrains.projector.client.common.protocol.SerializationToServerMessageEncoder
 import org.jetbrains.projector.common.misc.Do
-import org.jetbrains.projector.common.protocol.data.CommonIntSize
 import org.jetbrains.projector.common.protocol.handshake.*
 import org.jetbrains.projector.common.protocol.toClient.*
 import org.jetbrains.projector.util.logging.Logger
+import java.awt.GraphicsEnvironment
 import java.util.*
 import javax.swing.SwingUtilities
 import javax.swing.Timer
-import kotlin.collections.ArrayDeque
 
 class SwingClient(val transport: ProjectorTransport, val windowManager: AbstractWindowManager<*>) {
   val logger = Logger<SwingClient>()
@@ -73,8 +72,11 @@ class SwingClient(val transport: ProjectorTransport, val windowManager: Abstract
           is ServerDrawCommandsEvent.Target.Onscreen -> windowManager.doWindowDraw(target.windowId, serverEvent.drawEvents)
           is ServerDrawCommandsEvent.Target.Offscreen -> {
             val processor = ImageCacher.getOffscreenProcessor(target)
-            val deque = ArrayDeque(serverEvent.drawEvents.shrinkByPaintEvents())
-            processor.process(deque)
+            val newEvents = serverEvent.drawEvents.shrinkByPaintEvents()
+            val firstUnsuccessfulEvent = processor.processNew(newEvents)
+            firstUnsuccessfulEvent?.let {
+              logger.error { "Skipping drawing unsuccessful event for $target" }  // todo: support it
+            }
           }
         }
       }
@@ -89,11 +91,18 @@ class SwingClient(val transport: ProjectorTransport, val windowManager: Abstract
 
     transport.onOpen.await()
 
+    val allScreens = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map {
+      with(it.defaultConfiguration.bounds) {
+        DisplayDescription(x, y, width, height, it.defaultConfiguration.defaultTransform.scaleX)
+      }
+    }
+
     val handshake = ToServerHandshakeEvent(
       commonVersion = COMMON_VERSION,
       commonVersionId = commonVersionList.indexOf(COMMON_VERSION),
 
-      initialSize = CommonIntSize(1024, 968),
+      clientDoesWindowManagement = true,
+      displays = allScreens,
       supportedToClientCompressions = listOf(CompressionType.NONE),
       supportedToClientProtocols = listOf(ProtocolType.KOTLINX_PROTOBUF),
       supportedToServerCompressions = listOf(CompressionType.NONE),
